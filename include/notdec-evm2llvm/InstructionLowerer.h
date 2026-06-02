@@ -8,10 +8,12 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/Support/Error.h"
 
+#include "notdec-evm2llvm/LlvmLowerer.h"
 #include "notdec-evm2llvm/TacProgram.h"
 
 namespace llvm {
 class Function;
+class GlobalVariable;
 class LLVMContext;
 class Type;
 class Value;
@@ -34,7 +36,8 @@ class InstructionLowerer {
   InstructionLowerer(llvm::IRBuilder<> &builder, llvm::LLVMContext &context,
                      llvm::Type *wordType,
                      std::map<FactId, llvm::Value *> &values,
-                     const TacProgram &program, RuntimeHandles handles);
+                     const TacProgram &program, RuntimeHandles handles,
+                     EvmMemoryModel memoryModel);
 
   llvm::Error lower(const TacStatement &stmt);
   llvm::Expected<llvm::Value *> loadWord(const FactId &var);
@@ -50,6 +53,8 @@ class InstructionLowerer {
   llvm::Expected<std::vector<llvm::Value *>> loadOperands(const TacStatement &stmt,
                                                           unsigned expectedCount);
   llvm::Value *boolToWord(llvm::Value *value);
+  llvm::Value *memoryPointer(llvm::Value *address);
+  llvm::GlobalVariable *memoryGlobal();
   llvm::Function *runtimeFunction(const char *name);
 
   llvm::IRBuilder<> &Builder;
@@ -58,6 +63,8 @@ class InstructionLowerer {
   std::map<FactId, llvm::Value *> &Values;
   const TacProgram &Program;
   RuntimeHandles Handles;
+  EvmMemoryModel MemoryModel;
+  llvm::GlobalVariable *Memory = nullptr;
 };
 
 }  // namespace notdec::evm2llvm

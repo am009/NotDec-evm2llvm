@@ -5,6 +5,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
@@ -49,13 +50,14 @@ bool isDupOrSwapOpcode(llvm::StringRef op) {
 InstructionLowerer::InstructionLowerer(
     llvm::IRBuilder<> &builder, llvm::LLVMContext &context, llvm::Type *wordType,
     std::map<FactId, llvm::Value *> &values, const TacProgram &program,
-    RuntimeHandles handles)
+    RuntimeHandles handles, EvmMemoryModel memoryModel)
     : Builder(builder),
       Context(context),
       WordType(wordType),
       Values(values),
       Program(program),
-      Handles(handles) {}
+      Handles(handles),
+      MemoryModel(memoryModel) {}
 
 llvm::APInt InstructionLowerer::parseWordConstant(const std::string &text) const {
   llvm::StringRef value(text);
@@ -92,6 +94,42 @@ llvm::Error InstructionLowerer::defineWord(const FactId &var, llvm::Value *value
 
 llvm::Value *InstructionLowerer::boolToWord(llvm::Value *value) {
   return Builder.CreateZExt(value, WordType, "evm.bool");
+}
+
+llvm::GlobalVariable *InstructionLowerer::memoryGlobal() {
+  if (Memory != nullptr) {
+    return Memory;
+  }
+
+  auto *module = Builder.GetInsertBlock()->getModule();
+  auto *byteType = llvm::Type::getInt8Ty(Context);
+  auto *arrayType = llvm::ArrayType::get(byteType, 1024 * 1024);
+  std::string name = "notdec_evm_memory";
+  unsigned index = 1;
+  while (llvm::Value *existing = module->getNamedValue(name)) {
+    auto *global = llvm::dyn_cast<llvm::GlobalVariable>(existing);
+    if (global != nullptr && global->getValueType() == arrayType) {
+      Memory = global;
+      return Memory;
+    }
+    name = "notdec_evm_memory." + std::to_string(index++);
+  }
+
+  Memory = new llvm::GlobalVariable(*module, arrayType, false,
+                                    llvm::GlobalValue::ExternalLinkage,
+                                    nullptr, name);
+  return Memory;
+}
+
+llvm::Value *InstructionLowerer::memoryPointer(llvm::Value *address) {
+  if (MemoryModel == EvmMemoryModel::IntToPtr) {
+    return Builder.CreateIntToPtr(address, llvm::PointerType::get(Context, 0),
+                                  "evm.mem.ptr");
+  }
+
+  llvm::Value *zero = llvm::ConstantInt::get(address->getType(), 0);
+  return Builder.CreateGEP(memoryGlobal()->getValueType(), memoryGlobal(),
+                           {zero, address}, "evm.mem.ptr");
 }
 
 llvm::Function *InstructionLowerer::runtimeFunction(const char *name) {
@@ -398,8 +436,9 @@ llvm::Expected<llvm::Value *> InstructionLowerer::lowerStateRead(
   auto *operand = *operandOrError;
 
   if (stmt.Op == "MLOAD") {
-    return Builder.CreateCall(runtimeFunction("evm_mload"),
-                              {Handles.Mem, operand}, "evm.mload");
+    auto *load = Builder.CreateLoad(WordType, memoryPointer(operand), "evm.mload");
+    load->setAlignment(llvm::Align(1));
+    return load;
   }
   if (stmt.Op == "SLOAD") {
     return Builder.CreateCall(runtimeFunction("evm_sload"), {operand},
@@ -731,11 +770,15 @@ llvm::Error InstructionLowerer::lowerStateWrite(const TacStatement &stmt) {
   auto *rhs = *rhsOrError;
 
   if (stmt.Op == "MSTORE") {
-    Builder.CreateCall(runtimeFunction("evm_mstore"), {Handles.Mem, lhs, rhs});
+    auto *store = Builder.CreateStore(rhs, memoryPointer(lhs));
+    store->setAlignment(llvm::Align(1));
     return llvm::Error::success();
   }
   if (stmt.Op == "MSTORE8") {
-    Builder.CreateCall(runtimeFunction("evm_mstore8"), {Handles.Mem, lhs, rhs});
+    auto *byteValue = Builder.CreateTrunc(rhs, llvm::Type::getInt8Ty(Context),
+                                          "evm.mstore8.byte");
+    auto *store = Builder.CreateStore(byteValue, memoryPointer(lhs));
+    store->setAlignment(llvm::Align(1));
     return llvm::Error::success();
   }
   if (stmt.Op == "SSTORE") {

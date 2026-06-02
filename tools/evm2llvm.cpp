@@ -17,12 +17,27 @@ struct CliOptions {
   std::string FactsDir;
   std::string OutputPath;
   std::string ModuleName = "notdec.evm2llvm";
+  notdec::evm2llvm::EvmMemoryModel MemoryModel =
+      notdec::evm2llvm::EvmMemoryModel::IntToPtr;
 };
 
 void printUsage(const char *argv0) {
   std::cerr << "usage: " << argv0
             << " --facts <gigahorse-out-dir> --output <contract.ll> "
-               "[--module-name <name>]\n";
+               "[--module-name <name>] [--memory-model inttoptr|global-array]\n";
+}
+
+bool parseMemoryModel(const std::string &text,
+                      notdec::evm2llvm::EvmMemoryModel &model) {
+  if (text == "inttoptr") {
+    model = notdec::evm2llvm::EvmMemoryModel::IntToPtr;
+    return true;
+  }
+  if (text == "global-array") {
+    model = notdec::evm2llvm::EvmMemoryModel::GlobalArray;
+    return true;
+  }
+  return false;
 }
 
 llvm::Expected<CliOptions> parseArgs(int argc, char **argv) {
@@ -55,6 +70,16 @@ llvm::Expected<CliOptions> parseArgs(int argc, char **argv) {
         return value.takeError();
       }
       options.ModuleName = *value;
+    } else if (arg == "--memory-model") {
+      auto value = readValue("--memory-model");
+      if (!value) {
+        return value.takeError();
+      }
+      if (!parseMemoryModel(*value, options.MemoryModel)) {
+        return llvm::createStringError(
+            std::errc::invalid_argument,
+            "--memory-model must be inttoptr or global-array");
+      }
     } else if (arg == "--help" || arg == "-h") {
       printUsage(argv[0]);
       std::exit(0);
@@ -110,7 +135,8 @@ int main(int argc, char **argv) {
 
   llvm::LLVMContext context;
   auto moduleOrError = notdec::evm2llvm::lowerToLlvm(
-      context, *programOrError, {optionsOrError->ModuleName});
+      context, *programOrError,
+      {optionsOrError->ModuleName, optionsOrError->MemoryModel});
   if (!moduleOrError) {
     printError(moduleOrError.takeError());
     return 1;

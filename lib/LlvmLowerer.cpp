@@ -9,6 +9,7 @@
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/TargetParser/Triple.h"
+#include "llvm/IR/Attributes.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
@@ -150,8 +151,11 @@ llvm::Function *createFunctionPrototype(llvm::Module &module,
   argTypes.insert(argTypes.end(), function.Formals.size(), wordType);
   auto *functionType =
       llvm::FunctionType::get(returnTypeFor(context, function), argTypes, false);
-  return llvm::Function::Create(functionType, llvm::GlobalValue::ExternalLinkage,
-                                functionName(function), module);
+  auto *llvmFunction =
+      llvm::Function::Create(functionType, llvm::GlobalValue::ExternalLinkage,
+                             functionName(function), module);
+  llvmFunction->addFnAttr(llvm::Attribute::NullPointerIsValid);
+  return llvmFunction;
 }
 
 using PhiDefMap = std::map<FactId, FactId>;
@@ -576,7 +580,8 @@ llvm::Error lowerPrivateCall(
 
 llvm::Error lowerFunction(llvm::Module &module, const TacProgram &program,
                           const TacFunction &function, llvm::Function *llvmFunction,
-                          const std::map<FactId, llvm::Function *> &llvmFunctions) {
+                          const std::map<FactId, llvm::Function *> &llvmFunctions,
+                          EvmMemoryModel memoryModel) {
   auto &context = module.getContext();
   auto *wordType = llvm::Type::getIntNTy(context, 256);
 
@@ -688,7 +693,7 @@ llvm::Error lowerFunction(llvm::Module &module, const TacProgram &program,
     llvm::IRBuilder<> builder(llvmBlocks[blockId]);
 
     InstructionLowerer instructionLowerer(builder, context, wordType, values,
-                                          program, handles);
+                                          program, handles, memoryModel);
     for (const auto &stmt : block.Statements) {
       if (stmt.Op == "PHI" && phisWithIncoming.count(stmt.Id) != 0) {
         continue;
@@ -754,7 +759,8 @@ llvm::Expected<std::unique_ptr<llvm::Module>> lowerToLlvm(
 
   for (const auto &[_, function] : program.Functions) {
     if (auto error = lowerFunction(*module, program, function,
-                                   llvmFunctions.at(function.Id), llvmFunctions)) {
+                                   llvmFunctions.at(function.Id), llvmFunctions,
+                                   config.MemoryModel)) {
       return std::move(error);
     }
   }

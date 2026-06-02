@@ -12,9 +12,6 @@ void declareEvmRuntimeHelpers(llvm::Module &module) {
   auto *ptrType = llvm::PointerType::get(context, 0);
   auto *voidType = llvm::Type::getVoidTy(context);
 
-  module.getOrInsertFunction("evm_mload", wordType, ptrType, wordType);
-  module.getOrInsertFunction("evm_mstore", voidType, ptrType, wordType, wordType);
-  module.getOrInsertFunction("evm_mstore8", voidType, ptrType, wordType, wordType);
   module.getOrInsertFunction("evm_mcopy", voidType, ptrType, wordType, wordType,
                              wordType);
   module.getOrInsertFunction("evm_msize", wordType, ptrType);
